@@ -2,6 +2,8 @@ package commands
 
 import (
 	"encoding/hex"
+	"errors"
+	"strconv"
 
 	"github.com/pingcap-incubator/tinykv/kv/transaction/mvcc"
 	"github.com/pingcap-incubator/tinykv/proto/pkg/kvrpcpb"
@@ -70,18 +72,64 @@ func (p *Prewrite) prewriteMutation(txn *mvcc.MvccTxn, mut *kvrpcpb.Mutation) (*
 	// Hint: Check the interafaces provided by `mvcc.MvccTxn`. The error type `kvrpcpb.WriteConflict` is used
 	//		 denote to write conflict error, try to set error information properly in the `kvrpcpb.KeyError`
 	//		 response.
-	panic("prewriteMutation is not implemented yet")
+	// panic("prewriteMutation is not implemented yet")
+	lock, err := txn.GetLock(key)
+	if err != nil {
+		return nil, err
+	}
 
 	// YOUR CODE HERE (lab2).
 	// Check if key is locked. Report key is locked error if lock does exist, note the key could be locked
 	// by this transaction already and the current prewrite request is stale.
-	panic("check lock in prewrite is not implemented yet")
+	// panic("check lock in prewrite is not implemented yet")
 
+	if lock != nil && lock.Ts != txn.StartTS {
+		err := &kvrpcpb.KeyError{
+			Locked: lock.Info(key),
+			// Conflict: &kvrpcpb.WriteConflict{
+			// 	StartTs:    lock.Ts,
+			// 	ConflictTs: txn.StartTS,
+			// 	Key:        key,
+			// 	Primary:    lock.Primary,
+			// },
+		}
+		return err, nil
+	}
 	// YOUR CODE HERE (lab2).
 	// Write a lock and value.
 	// Hint: Check the interfaces provided by `mvccTxn.Txn`.
-	panic("lock record generation is not implemented yet")
+	// panic("lock record generation is not implemented yet")
+	existingWrite, _, err := txn.CurrentWrite(key)
+	if err != nil {
+		return nil, err
+	}
+	if existingWrite != nil {
+		err := &kvrpcpb.KeyError{
+			Conflict: &kvrpcpb.WriteConflict{
+				StartTs:    txn.StartTS,
+				ConflictTs: existingWrite.StartTS,
+				Key:        key,
+				Primary:    p.request.PrimaryLock,
+			},
+		}
+		return err, nil
+	}
 
+	mvccLock := &mvcc.Lock{
+		Ts:      txn.StartTS,
+		Ttl:     p.request.LockTtl,
+		Primary: p.request.PrimaryLock,
+	}
+	switch mut.Op {
+	case kvrpcpb.Op_Put:
+		mvccLock.Kind = mvcc.WriteKindPut
+	case kvrpcpb.Op_Del:
+		mvccLock.Kind = mvcc.WriteKindDelete
+	default:
+		return nil, errors.New("unexpect Op: " + strconv.Itoa(int(mut.Op)))
+	}
+	txn.PutLock(key, mvccLock)
+	txn.PutValue(key, mut.Value)
 	return nil, nil
 }
 
